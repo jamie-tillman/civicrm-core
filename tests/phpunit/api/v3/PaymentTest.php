@@ -181,6 +181,7 @@ class api_v3_PaymentTest extends CiviUnitTestCase {
     $this->callAPISuccess('Payment', 'sendconfirmation', ['id' => $payment['id']]);
     $mut->assertSubjects(['Payment Receipt - Annual CiviCRM meet']);
     $mut->checkMailLog([
+      'From: "FIXME" <info@EXAMPLE.ORG>',
       'Dear Anthony,',
       'Total Fees: $ 300.00',
       'This Payment Amount: $ 50.00',
@@ -204,6 +205,7 @@ class api_v3_PaymentTest extends CiviUnitTestCase {
    */
   public function testPaymentEmailReceiptFullyPaid() {
     $mut = new CiviMailUtils($this);
+    CRM_Core_Config::singleton()->userPermissionClass->permissions = ['access CiviContribute', 'edit contributions', 'access CiviCRM'];
     list($lineItems, $contribution) = $this->createParticipantWithContribution();
 
     $params = [
@@ -212,9 +214,12 @@ class api_v3_PaymentTest extends CiviUnitTestCase {
     ];
     $payment = $this->callAPISuccess('payment', 'create', $params);
 
-    $this->callAPISuccess('Payment', 'sendconfirmation', ['id' => $payment['id']]);
+    // Here we set the email to an  invalid email & use check_permissions, domain email should be used.
+    $email = $this->callAPISuccess('Email', 'create', ['contact_id' => 1, 'email' => 'bob@example.com']);
+    $this->callAPISuccess('Payment', 'sendconfirmation', ['id' => $payment['id'], 'from' => $email['id'], 'check_permissions' => 1]);
     $mut->assertSubjects(['Payment Receipt - Annual CiviCRM meet', 'Registration Confirmation - Annual CiviCRM meet']);
     $mut->checkMailLog([
+      'From: "FIXME" <info@EXAMPLE.ORG>',
       'Dear Anthony,',
       'A payment has been received.',
       'Total Fees: $ 300.00',
@@ -366,10 +371,13 @@ class api_v3_PaymentTest extends CiviUnitTestCase {
 
   /**
    * Function to assert db values
+   *
+   * @throws \CRM_Core_Exception
    */
   public function checkPaymentResult($payment, $expectedResult) {
+    $refreshedPayment = $this->callAPISuccessGetSingle('Payment', ['financial_trxn_id' => $payment['id']]);
     foreach ($expectedResult[$payment['id']] as $key => $value) {
-      $this->assertEquals($payment['values'][$payment['id']][$key], $value, 'mismatch on ' . $key);
+      $this->assertEquals($refreshedPayment[$key], $value, 'mismatch on ' . $key);      $this->assertEquals($refreshedPayment[$key], $value, 'mismatch on ' . $key);
     }
   }
 
@@ -665,6 +673,7 @@ class api_v3_PaymentTest extends CiviUnitTestCase {
    */
   public function testCreatePaymentPayLater() {
     $this->createLoggedInUser();
+    $processorID  = $this->paymentProcessorCreate();
     $contributionParams = [
       'total_amount' => 100,
       'currency' => 'USD',
@@ -678,6 +687,11 @@ class api_v3_PaymentTest extends CiviUnitTestCase {
     $params = [
       'contribution_id' => $contribution['id'],
       'total_amount' => 100,
+      'card_type_id' => 'Visa',
+      'pan_truncation' => '1234',
+      'trxn_result_code' => 'Startling success',
+      'payment_instrument_id' => $processorID,
+      'trxn_id' => 1234,
     ];
     $payment = $this->callAPISuccess('Payment', 'create', $params);
     $expectedResult = [
@@ -687,6 +701,11 @@ class api_v3_PaymentTest extends CiviUnitTestCase {
         'total_amount' => 100,
         'status_id' => 1,
         'is_payment' => 1,
+        'card_type_id' => 1,
+        'pan_truncation' => '1234',
+        'trxn_result_code' => 'Startling success',
+        'trxn_id' => 1234,
+        'payment_instrument_id' => 1,
       ],
     ];
     $this->checkPaymentResult($payment, $expectedResult);
